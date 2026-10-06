@@ -1,0 +1,318 @@
+---
+title: ""
+output:
+  pdf_document: default
+geometry: "margin=0.5in"
+params: 
+  core_name: 0
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(DT)
+library(ggplot2)
+library(ggh4x)
+knitr::opts_chunk$set(echo = FALSE)
+options(tinytex.verbose = TRUE)
+
+filter_peak_year <- function(x, buffer = 5) {
+  x <- sort(x)
+  out <- x[1]
+  for (yr in x[-1]) {
+    if (yr - tail(out, 1) >= buffer) {
+      out <- c(out, yr)
+    }
+  }
+  out
+}
+
+source("https://raw.githubusercontent.com/bcgov/FAIBBase/refs/heads/master/R/stemMapping.R")
+
+
+cores_wide <- readRDS("D:/R/TreeCores/TreeCores/Data/Old/core_2017_2021_wide.rds")
+cores_long <- readRDS("D:/R/TreeCores/TreeCores/Data/Old/core_2017_2021_long.rds")
+cores <- readRDS("D:/R/TreeCores/TreeCores/Data/Old/core_suppressed_results.rds")
+
+
+site_id <- unique(dat$Site_ID)
+tree_id <- unique(dat$Tree_ID)
+year <- as.numeric(substr(params$core_name, 1, 4))
+
+```
+
+
+```{r, echo=FALSE}
+cores_wide %>%
+  filter(objectID == params$core_name) %>%
+  left_join(cores %>% select(objectID, MGMT_UNIT:ATU_COMPLETION_DATE), by = 'objectID') %>%
+  select(Year = file_year, MGMT_UNIT, Sample_type = SAMPLE_ESTABLISHMENT_TYPE, 
+         Site = Site_ID, Tree_ID, Species, Lab_Age, AGE_MEASURE_CODE) %>%
+  knitr::kable()
+
+
+cores_wide %>%
+  filter(objectID == params$core_name) %>%
+  left_join(cores %>% select(objectID, MGMT_UNIT:ATU_COMPLETION_DATE), by = 'objectID') %>%
+  select(Lab_Calc_Missed_Yrs, Missed_Yrs_To_Pith, 
+         CROWN_CLASS_CODE, RESIDUAL_IND) %>%
+  knitr::kable()
+```
+
+
+```{r, echo=FALSE, warning=FALSE, out.width="70%", fig.align="center"}
+
+ymean <- mean(dat$mm)
+yrange <- range(dat$mm)
+scale_factor <- max(dat$mm, na.rm = T) / max(abs(dat$pgc), na.rm = T)
+y2range <- yrange/scale_factor
+y2max <- y2range[2] 
+y2min <- min(range(dat$pgc, na.rm = T))
+scale_factor2 <- (yrange[2] - yrange[1])/(y2max-y2min)
+offset <- yrange[1] - (y2min) * scale_factor2
+
+over_100 <- which(dat$pgc >= 1)
+sign_change <- which(diff(sign(diff(dat$pgc))) != 0) + 1
+
+peak_year <- sort(dat$Year[intersect(over_100, sign_change)] - 1)
+
+peak_year_filtered <- filter_peak_year(peak_year, 5)
+
+
+p <- ggplot(dat) +
+  geom_line(aes(Year, mm)) +
+  geom_line(aes(Year - 1, pgc * scale_factor2 + offset),
+            color = "skyblue2") +
+  geom_hline(aes(yintercept = ymean, color = "Mean Ring Width", linetype = "Mean Ring Width")) +
+  geom_hline(aes(yintercept = scale_factor2 + offset, color = "PGC = 1", linetype = "PGC = 1")) +
+  geom_hline(aes(yintercept = 0.5 * scale_factor2 + offset, color = "PGC = 0.5", linetype = "PGC = 0.5")) +
+  #geom_vline(aes(xintercept = peak_year, color = "Peak year", linetype = "Peak year"), linewidth = 1.1) +
+  scale_color_manual(name = NULL,  values = c("Mean Ring Width" = "darkgray", "PGC = 1" = "red1",
+                                              "PGC = 0.5" = "green1", "Peak year" = "skyblue2")) +
+  scale_linetype_manual(name = NULL, values = c("Mean Ring Width" = "solid", "PGC = 1" = "dashed",
+                                                "PGC = 0.5" = "dashed", "Peak year" = "dotted")) +
+  scale_y_continuous(name = "Ring Width (mm)", sec.axis = sec_axis(~ (. - offset) / scale_factor2, name = "PGC/100")) +
+  coord_cartesian(ylim = yrange) +
+  theme_bw(4) +
+  theme(legend.position = "none",
+        #legend.direction = "horizontal",
+        #legend.box = "horizontal",
+        axis.title.y.right = element_text(color = "steelblue"),
+        axis.text.y.right  = element_text(color = "steelblue"),
+        axis.ticks.y.right = element_line(color = "steelblue"))
+
+if (!is.null(peak_year_filtered) && length(peak_year_filtered) > 0 && !all(is.na(peak_year_filtered))) {
+  p <- p +
+    geom_vline(
+      data = data.frame(peak_year_filtered = peak_year_filtered),
+      aes(xintercept = peak_year_filtered,
+          color = "Peak year",
+          linetype = "Peak year")
+    )  +
+    annotate(
+      "text",
+      x = mean(range(dat$Year)),
+      y = yrange[2]*0.97,
+      label = paste0(
+        "Year of Release: ",
+        paste(peak_year_filtered, collapse = ", ")
+      ),
+      vjust = -0.5,
+      color = "steelblue"
+    )
+}
+
+
+ggsave("plot.png", p, width = 600, height = 400, units = "px")
+
+knitr::include_graphics("plot.png")
+
+```
+
+#### All Cores in the Sample Site
+
+```{r, echo=FALSE, warning=FALSE, out.width="100%", fig.align="left"}
+
+p2 <- dat %>%
+  filter(Site_ID == site_id) %>%
+  mutate(Tree_ID = as.factor(Tree_ID)) %>%
+  ggplot() +
+  geom_point(aes(x = Year, y = mm, group = Tree_ID, col = Tree_ID)) +
+  geom_line(aes(x = Year, y = mm, group = Tree_ID, col = Tree_ID)) +
+  facet_wrap(~Species,  ncol = 3) +
+  force_panelsizes(
+    cols = unit(3, "cm"), 
+    rows = unit(2, "cm")
+  ) +
+  scale_x_continuous(labels = function(x) as.integer(x)) +
+   guides(
+    color = guide_legend(nrow = 1, byrow = TRUE)
+  ) +
+  theme_bw(4)+
+  theme(legend.position = "top",
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+  legend.key.size = unit(0.3, "cm")
+  )
+
+ggsave("plot2.png", p2, width = 1200, height = 700, units = "px")
+
+knitr::include_graphics("plot2.png")
+
+
+```
+
+\newpage
+
+
+#### Field Comments & Lab Comments
+
+```{r}
+cores_wide %>%
+  filter(Site_ID == site_id, Tree_ID == tree_id, file_year == year) %>% pull(Field_Comments)
+
+cores_wide %>%
+  filter(Site_ID == site_id, Tree_ID == tree_id, file_year == year) %>% pull(Lab_Comments)
+```
+
+
+#### RESULTS History
+
+```{r}
+
+core_suppressed %>%
+  filter(Site_ID %in% site_id, Tree_ID == tree_id) %>%
+  select(OPENING_ID, SILV_BASE_CODE, ATU_START_DATE, ATU_COMPLETION_DATE) %>%
+   mutate(
+     OPENING_ID = as.integer(OPENING_ID),
+      ATU_START_DATE = paste0(
+        substr(ATU_START_DATE, 1, 4), "-",
+        substr(ATU_START_DATE, 5, 6), "-",
+        substr(ATU_START_DATE, 7, 8)
+      ),
+      ATU_COMPLETION_DATE = paste0(
+        substr(ATU_COMPLETION_DATE, 1, 4), "-",
+        substr(ATU_COMPLETION_DATE, 5, 6), "-",
+        substr(ATU_COMPLETION_DATE, 7, 8)
+      )
+    ) %>%
+  distinct() %>%
+  knitr::kable()
+
+
+```
+
+#### Stem Map
+
+```{r, echo=FALSE, warning=FALSE, out.width="90%", fig.align="center"}
+
+measyear <- cores_wide %>%
+  filter(Site_ID %in% site_id, Tree_ID == tree_id) %>%
+    pull(file_year) %>% unique()
+
+visitnum <- cores_wide %>%
+  filter(Site_ID == site_id) %>%
+  pull(Visit_ID) %>% unique()
+
+if (is.na(visitnum)) visitnum <- 1
+
+treeset <- treedat_pub %>%
+  filter(SITE_IDENTIFIER == site_id, VISIT_NUMBER == visitnum)
+
+treemap <- stemMapping(objectID = treeset$TREE_NO,
+                       bearing = treeset$AZIMUTH,
+                       distance = treeset$DISTANCE,
+                       plotShape = "circle",
+                       plotSize = 11.28,
+                       distanceUnit = "m",
+                       outputFormat = "table",
+                       showID = TRUE) 
+
+treemap1 <- treemap %>%
+  left_join(treeset %>% 
+              select(TREE_NO, SPECIES, DBH, HEIGHT, LV_D, SUIT_SI, RESIDUAL, COMP_CHG) %>%
+              mutate(objectID = as.character(TREE_NO)),
+            by = c('objectID')) %>% data.table()
+
+  
+if (visitnum > 1){
+
+p3 <- ggplot() +
+  geom_point(data = treemap1 %>% filter(objectID == "plotboundary"), 
+             aes(x = x, y = y), colour = "darkgray") +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary"), 
+             aes(x = x, y = y, col = SPECIES, shape = COMP_CHG, size = HEIGHT)) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"), 
+             aes(x = x, y = y, shape = "SITE_TREE")) +
+  scale_shape_manual(values = c("D" = 2, "I" = 3, "M" = 1, "S" = 16, "SITE_TREE" = 4)) +
+  scale_size_continuous(range = c(0.5, 3)) + 
+  geom_text(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI %in% c("Y", "N")),
+            aes(x = x, y = y, label = objectID),
+            vjust = 1.5) +
+  labs(x = NULL, y = NULL, title = paste0(site_id))+
+  coord_equal() +
+  theme_bw(5) +
+theme(
+  legend.title = element_text(size = 5),
+  legend.text = element_text(size = 4),
+  legend.key.size = unit(0.4, "cm"),
+  legend.key.height = unit(0.3, "cm"),
+  legend.spacing.y = unit(0.1, "cm")
+)
+
+} else {
+
+p3 <- ggplot() +
+  geom_point(data = treemap1 %>% filter(objectID == "plotboundary"), 
+             aes(x = x, y = y), colour = "darkgray") +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary"), 
+             aes(x = x, y = y, col = SPECIES, shape = LV_D, size = HEIGHT)) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"), 
+             aes(x = x, y = y, shape = "SITE_TREE")) +
+  scale_shape_manual(values = c("L" = 16, "D" = 1, "SITE_TREE" = 4)) +
+  scale_size_continuous(range = c(0.5, 3)) + 
+  geom_text(data = treemap1  %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"),
+            aes(x = x, y = y, label = objectID),
+            vjust = 1.5) +
+  labs(x = NULL, y = NULL, title = paste0(site_id))+
+  coord_equal() +
+  theme_bw(5) +
+theme(
+  legend.title = element_text(size = 5),
+  legend.text = element_text(size = 4),
+  legend.key.size = unit(0.4, "cm"),
+  legend.key.height = unit(0.3, "cm"),
+  legend.spacing.y = unit(0.1, "cm")
+)
+
+}
+
+
+ggsave("plot3.png", p3, width = 600, height = 500, units = "px", scale = 1.5)
+
+knitr::include_graphics("plot3.png")
+```
+
+
+#### Damage Agent of Dead Trees
+
+
+```{r}
+
+measyear <-  year
+
+visitnum <- cores_wide %>%
+  filter(Site_ID == site_id) %>%
+  pull(Visit_ID) %>% unique()
+
+if (is.na(visitnum)) visitnum <- 1
+
+a <- treedat_pub %>%
+    filter(SITE_IDENTIFIER == site_id, VISIT_NUMBER == visitnum, LV_D == "D") %>%
+  filter(is.na(DAM_AGNA) |  (!grepl("U", DAM_AGNA) & DAM_AGNA != "O")) %>%
+    select(TREE_NO, SPECIES, LV_D, DAM_AGNA) 
+
+if (nrow(a) > 0) a else "No data available."
+```
+
