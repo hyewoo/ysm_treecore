@@ -1,0 +1,531 @@
+---
+title: "Ground Sample Tree Core Data with Suspected Growth Suppression"
+runtime: shiny
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 3  
+    toc_float: true
+author: Hyeyoung Woo
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+---
+
+```{r setup, include=FALSE}
+library(shiny)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(DT)
+library(ggplot2)
+library(ggh4x)
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+knitr::opts_chunk$set(class.output="bg-warning")
+
+
+filter_peak_year <- function(x, buffer = 5) {
+  x <- sort(x)
+  out <- x[1]
+  for (yr in x[-1]) {
+    if (yr - tail(out, 1) >= buffer) {
+      out <- c(out, yr)
+    }
+  }
+  out
+}
+
+source("https://raw.githubusercontent.com/bcgov/FAIBBase/refs/heads/master/R/stemMapping.R")
+
+
+cores_wide <- readRDS("core_2017_2021_wide.rds")
+cores_long <- readRDS("core_2017_2021_long.rds")
+cores <- readRDS("core_suppressed_results.rds")
+
+
+treedat_pub <- fread("faib_tree_detail.csv")
+
+
+core_filtered <- cores_wide %>% 
+  filter(SAMPLE_ESTABLISHMENT_TYPE %in% c("YSM", "CMI", "NFI"), SUIT_SI == "Y") %>% 
+  pull(objectID)
+
+
+n <- 5
+
+cores1 <- cores_long %>%
+  filter(objectID %in% core_filtered) %>%
+  #mutate(file_year = as.integer(substr(objectID, 1, 4))) %>%
+  arrange(Site_ID, Subplot, Tree_ID, objectID, desc(Year)) %>%
+  group_by(objectID) %>%
+  mutate(rolling_mean1 = zoo::rollmean(mm, k = 5, fill = NA, align = "right"),
+         rolling_mean2 = zoo::rollmean(mm, k = 10, fill = NA, align = "right")) %>%
+  mutate(pgc = ((rolling_mean1 - lead(rolling_mean1, 5)) / lead(rolling_mean1, 5)),
+         pgc_sign = c(sign(diff(pgc)), NA),
+         pgc1 = ((rolling_mean2 - lead(rolling_mean2, 10)) / lead(rolling_mean2, 10)),
+         pgc_sign1 = c(sign(diff(pgc1)), NA)) %>% 
+  data.table()
+
+core_suppressed <- cores1 %>%
+  filter(pgc >= 1) %>%
+  select(Site_ID, Subplot, Tree_ID, Species, req_num, objectID) %>% distinct() %>%
+  left_join(cores_wide %>% select(objectID, DBH:SAMPLE_ESTABLISHMENT_TYPE) %>% distinct(), by = 'objectID') %>%
+  left_join(cores %>% select(objectID, MGMT_UNIT:ATU_COMPLETION_DATE) %>% distinct(), by = 'objectID') %>% data.table()
+
+core_suppressed1 <- cores1 %>%
+  filter(pgc >= .5) %>%
+  select(Site_ID, Subplot, Tree_ID, Species, req_num, objectID) %>% distinct() %>%
+  #left_join(cores_wide %>% select(objectID, DBH:SAMPLE_ESTABLISHMENT_TYPE) %>% distinct(), by = 'objectID') %>%
+  #left_join(cores %>% select(objectID, MGMT_UNIT:ATU_COMPLETION_DATE) %>% distinct(), by = 'objectID') %>%
+  data.table()
+
+
+```
+
+
+
+## Backgrounds
+
+Tree cores are collected from site trees in provincial monitoring sample plots to determine tree age for site index estimation. Site trees are selected according to the SIBEC standard, which requires trees to be free from suppression, disease or damage, residual effects, and open-grown conditions. Unlike the other selection criteria, evidence of suppression is often difficult or impossible to identify during field surveys.  
+
+Tree-ring patterns provide a means of detecting past suppression and release events that may not be apparent in the field. However, these growth patterns are not currently evaluated as part of the site tree selection and data compilation process.  
+
+This document presents examples of tree core records with suspected suppression to support the identification and exclusion of suppressed trees from site tree selection. Suspected suppression is identified using the Percent Growth Change (PGC) method <a href="https://esajournals.onlinelibrary.wiley.com/doi/abs/10.1890/0012-9615(1997)067[0225:RGACFR]2.0.CO;2">
+(Nowacki and Abrams 1997)
+</a>. Tree cores exhibiting growth changes of at least 100% (indicating potential suppression or release) are reviewed, and the annual ring-width patterns are presented alongside supporting information, including stem maps, sample plot history, and neighbouring tree conditions.  
+
+The examples presented herein provide a basis for evaluating the applicability of this assessment method for operational use. Incorporating suppression assessment into the data review and compilation process for provincial monitoring samples would improve the identification of unsuitable site trees and enhance the consistency and reliability of site index estimates derived from these data.  
+
+
+## Data and Method
+
+Raw tree core count data were obtained from the [FAIB Ground Sample Program Contract Deliverables](//objectstore3.nrs.bcgov/s164/S63016/!Workgrp/Inventory/Ground_Sampling_Program/Contract_Deliverables/Tree_Core_Data).  Annual tree-ring analysis reports **from 2017 to 2019, and 2021** were compiled and consolidated for this review.      
+
+For each tree core record, the percent growth change (PGC) was calculated as:  
+
+$$
+PGC = \frac{M_2-M_1}{M_1} \times 100
+$$
+
+where $M_1$ represents the mean radial growth during the preceding five years and $M_2$ represents the mean radial growth during the subsequent five years. A five-year moving window was selected because the site trees evaluated in this study are relatively young, with target ages generally around 50 years.  
+
+Following the criteria described by Nowacki and Abrams (1997), a PGC of 50–100% is considered indicative of a moderate release, whereas a PGC greater than 100% represents a major release. This assessment focused only on major release events (PGC > 100%), which were reviewed as potential evidence of previous suppression.  
+
+The examples presented in this document include tree core records that meet the following criteria: (1) a PGC greater than 100% was detected based on radial growth measurements, (2) the trees were identified as site trees (`SUIT_SI = "Y"`), and (3) the trees were included in the YSM, CMI, or NFI sample list. Other tree core records, including those collected from FLT or VRI samples, were not included in this analysis.  
+
+The report was updated from the previous version to include the following:  
+
+  - Checked and confirmed that there are no duplicated cores in the suspected suppressed core list.    
+  - Included harvest history from RESULTS (accessed on 2026-10-02) where `SILV_BASE_CODE = "DN"`, based on `OPENING_ID` from the 2025 VRI.  
+  - Ignored the current-year ring width (e.g., the 2020 ring width for trees measured in 2020).  
+  - Included `CROWN_CLASS_CODE`,	`RESIDUAL_IND`, and	`AGE_MEASURE_CODE` information.  
+  - Included information on lab-calculated missed years (or extrapolated lab age).  
+    
+Core pictures are **not included**, as photos were not available for the older data.      
+
+
+## Result
+
+
+|                                 |                        |  
+|---------------------------------|------------------------|
+|  Total Number of Tree Cores Assessed | `r nrow(cores_wide)`   |
+|  Number of Tree Cores with `SUIT_SI = "Y"` and in YSM, CMI, or NFI | `r length(core_filtered)` |
+|  Number of Tree Cores with > PGC 50%  | `r nrow(core_suppressed1)` |
+|  Number of Tree Cores with > PGC 100% | `r nrow(core_suppressed)` |
+
+
+
+
+```{r, echo=FALSE}
+
+fluidRow(
+  
+  column(width = 4,
+         br(),
+         
+         inputPanel(
+  selectInput("site_id", label = "Select SITE_IDENTIFIER",
+              choices = sort(unique(core_suppressed$Site_ID))),
+  selectInput(
+    "tree_id",
+    label = "Select TREE_NO",
+    choices = NULL
+  ),
+),
+
+br(),
+renderText(
+      paste0("Year: ", 
+             cores_wide %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(file_year) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("Management Unit: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id) %>%
+    select(MGMT_UNIT) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("Sample Type: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id) %>%
+    select(SAMPLE_ESTABLISHMENT_TYPE) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("Species: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(Species) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("DBH: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(DBH) %>% unique()
+  )
+      ),
+renderText(
+      paste0("Lab Age: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(Lab_Age) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("Extrapolated Lab Age: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(Lab_Age_Extrp) %>% unique()
+  )
+      ),
+
+renderText(
+      paste0("Lab Calculated Missed Years: ", 
+             core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(Lab_Calc_Missed_Yrs) %>% unique()
+  )
+      ),
+
+
+  ),
+
+
+
+  column(width = 8,
+         
+         
+renderPlot({
+  
+  req(input$site_id, input$tree_id)
+  
+dat <- cores1 %>%
+  filter(Site_ID == input$site_id, Tree_ID == input$tree_id)
+
+
+currentyear <- as.numeric(substr(unique(dat$objectID), 1, 4))
+dat <- dat %>% filter(Year < currentyear)
+  
+
+
+ymean <- mean(dat$mm)
+yrange <- range(dat$mm)
+scale_factor <- max(dat$mm, na.rm = T) / max(abs(dat$pgc), na.rm = T)
+y2range <- yrange/scale_factor
+y2max <- y2range[2] 
+y2min <- min(range(dat$pgc, na.rm = T))
+scale_factor2 <- (yrange[2] - yrange[1])/(y2max-y2min)
+offset <- yrange[1] - (y2min) * scale_factor2
+
+over_100 <- which(dat$pgc >= 1)
+sign_change <- which(diff(sign(diff(dat$pgc))) != 0) + 1
+
+peak_year <- sort(dat$Year[intersect(over_100, sign_change)] - 1)
+
+peak_year_filtered <- filter_peak_year(peak_year, 5)
+
+
+
+p <- ggplot(dat) +
+  geom_line(aes(Year, mm), linewidth = 1.2) +
+  geom_line(aes(Year - 1, pgc * scale_factor2 + offset),
+            color = "skyblue2", linewidth = 1.1) +
+  geom_hline(aes(yintercept = ymean, color = "Mean Ring Width", linetype = "Mean Ring Width"), linewidth = 0.8) +
+  geom_hline(aes(yintercept = scale_factor2 + offset, color = "PGC = 1", linetype = "PGC = 1"), linewidth = 0.8) +
+  geom_hline(aes(yintercept = 0.5 * scale_factor2 + offset, color = "PGC = 0.5", linetype = "PGC = 0.5"), linewidth = 0.8) +
+  #geom_vline(aes(xintercept = peak_year, color = "Peak year", linetype = "Peak year"), linewidth = 1.1) +
+  scale_color_manual(name = NULL,  values = c("Mean Ring Width" = "darkgray", "PGC = 1" = "red1",
+                                              "PGC = 0.5" = "green1", "Peak year" = "skyblue2")) +
+  scale_linetype_manual(name = NULL, values = c("Mean Ring Width" = "solid", "PGC = 1" = "dashed",
+                                                "PGC = 0.5" = "dashed", "Peak year" = "dotted")) +
+  scale_y_continuous(name = "Ring Width (mm)", sec.axis = sec_axis(~ (. - offset) / scale_factor2, name = "PGC/100")) +
+  coord_cartesian(ylim = yrange) +
+  theme_bw(15) +
+  theme(legend.position = "top",
+        legend.direction = "horizontal",
+        legend.box = "horizontal",
+        axis.title.y.right = element_text(color = "steelblue"),
+        axis.text.y.right  = element_text(color = "steelblue"),
+        axis.ticks.y.right = element_line(color = "steelblue"))
+
+
+if (!is.null(peak_year_filtered) && length(peak_year_filtered) > 0 && !all(is.na(peak_year_filtered))) {
+  p <- p +
+    geom_vline(
+      data = data.frame(peak_year_filtered = peak_year_filtered),
+      aes(xintercept = peak_year_filtered,
+          color = "Peak year",
+          linetype = "Peak year"),
+      linewidth = 1.1
+    )  +
+    annotate(
+      "text",
+      x = mean(range(dat$Year)),
+      y = yrange[2],
+      label = paste0(
+        "Year of Release: ",
+        paste(peak_year_filtered, collapse = ", ")
+      ),
+      vjust = -0.5,
+      color = "steelblue",
+      size = 4
+    )
+}
+
+p
+
+
+})
+
+  )
+  
+)
+
+
+observeEvent(input$site_id, {
+  updateSelectInput(
+    session,
+    "tree_id",
+    choices = core_suppressed %>%
+      filter(Site_ID == input$site_id) %>%
+      distinct(Tree_ID) %>%
+      arrange(Tree_ID) %>%
+      pull(Tree_ID)
+  )
+}, ignoreInit = FALSE)
+
+
+
+
+renderTable({
+  
+  req(input$site_id, input$tree_id)
+  
+cores_wide %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(CROWN_CLASS_CODE, RESIDUAL_IND, AGE_MEASURE_CODE, BORED_AGE_SOURCE) %>% distinct()
+
+})
+
+
+
+renderTable({
+  
+  req(input$site_id, input$tree_id)
+  
+c <- cores_wide %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+  mutate(Field_Comments = ifelse(Field_Comments == "n/a", NA, Field_Comments)) %>%
+    select(Field_Comments, Lab_Comments) %>% distinct() %>% select(where(~ !all(is.na(.)))) 
+
+if (nrow(c) > 0) c
+
+
+})
+
+
+
+renderTable({
+  
+  req(input$site_id, input$tree_id)
+  
+b <- core_suppressed %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+  select(
+    OPENING_ID,
+    SILV_BASE_CODE,
+    ATU_START_DATE,
+    ATU_COMPLETION_DATE
+  ) %>%
+   mutate(
+     OPENING_ID = as.integer(OPENING_ID),
+      ATU_START_DATE = paste0(
+        substr(ATU_START_DATE, 1, 4), "-",
+        substr(ATU_START_DATE, 5, 6), "-",
+        substr(ATU_START_DATE, 7, 8)
+      ),
+      ATU_COMPLETION_DATE = paste0(
+        substr(ATU_COMPLETION_DATE, 1, 4), "-",
+        substr(ATU_COMPLETION_DATE, 5, 6), "-",
+        substr(ATU_COMPLETION_DATE, 7, 8)
+      )
+    ) %>%
+  distinct()
+
+if (!is.na(b$SILV_BASE_CODE)) b
+
+})
+
+
+
+renderPlot({
+  
+  req(input$site_id, input$tree_id)
+  
+measyear <- cores_wide %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    pull(file_year) %>% unique()
+
+visitnum <- cores_wide %>%
+  filter(Site_ID == input$site_id) %>%
+  pull(Visit_ID) %>% unique()
+
+if (is.na(visitnum)) visitnum <- 1
+
+treeset <- treedat_pub %>%
+  filter(SITE_IDENTIFIER == input$site_id, VISIT_NUMBER == visitnum)
+
+treemap <- stemMapping(objectID = treeset$TREE_NO,
+                       bearing = treeset$AZIMUTH,
+                       distance = treeset$DISTANCE,
+                       plotShape = "circle",
+                       plotSize = 11.28,
+                       distanceUnit = "m",
+                       outputFormat = "table",
+                       showID = TRUE) 
+
+treemap1 <- treemap %>%
+  left_join(treeset %>% 
+              select(TREE_NO, SPECIES, DBH, HEIGHT, LV_D, SUIT_SI, RESIDUAL, COMP_CHG) %>%
+              mutate(objectID = as.character(TREE_NO)),
+            by = c('objectID')) %>% data.table()
+
+  
+if (visitnum > 1){
+
+p <- ggplot() +
+  geom_point(data = treemap1 %>% filter(objectID == "plotboundary"), 
+             aes(x = x, y = y), colour = "darkgray", size = 0.7) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary"), 
+             aes(x = x, y = y, col = SPECIES, shape = COMP_CHG, size = HEIGHT)) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"), 
+             aes(x = x, y = y, shape = "SITE_TREE"), 
+             size = 2) +
+  scale_shape_manual(values = c("D" = 2, "I" = 3, "M" = 1, "S" = 16, "SITE_TREE" = 4)) +
+  geom_text(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI %in% c("Y", "N")),
+            aes(x = x, y = y, label = objectID),
+            vjust = 1.5) +
+  labs(x = NULL, y = NULL, title = paste0(input$site_id))+
+  coord_equal() +
+  theme_bw(15)
+
+} else {
+
+p <- ggplot() +
+  geom_point(data = treemap1 %>% filter(objectID == "plotboundary"), 
+             aes(x = x, y = y), colour = "darkgray", size = 0.7) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary"), 
+             aes(x = x, y = y, col = SPECIES, shape = LV_D, size = HEIGHT)) +
+  geom_point(data = treemap1 %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"), 
+             aes(x = x, y = y, shape = "SITE_TREE"), #shape = 10, 
+             size = 2) +
+  scale_shape_manual(values = c("L" = 16, "D" = 1, "SITE_TREE" = 4)) +
+  geom_text(data = treemap1  %>% filter(objectID != "plotboundary", !is.na(SUIT_SI), SUIT_SI == "Y"),
+            aes(x = x, y = y, label = objectID),
+            vjust = 1.5) +
+  labs(x = NULL, y = NULL, title = paste0(input$site_id))+
+  coord_equal() +
+  theme_bw(15)
+
+}
+  p
+})
+
+
+
+renderTable({
+  
+  req(input$site_id, input$tree_id)
+  
+measyear <-  cores_wide %>%
+  filter(Site_ID %in% input$site_id, Tree_ID == input$tree_id) %>%
+    select(file_year) %>% unique()
+
+visitnum <- cores1 %>%
+  filter(Site_ID == input$site_id) %>%
+  pull(Visit_ID)
+
+a <- treedat_pub %>%
+    filter(SITE_IDENTIFIER == input$site_id, VISIT_NUMBER == visitnum, LV_D == "D") %>%
+  filter(is.na(DAM_AGNA) |  (!grepl("U", DAM_AGNA) & DAM_AGNA != "O")) %>%
+    select(TREE_NO, SPECIES, LV_D, DAM_AGNA) 
+
+if (nrow(a) > 0) a
+
+})
+
+
+```
+
+
+
+
+
+
+#### All Cores in the Sample Site
+
+
+```{r, fig.align='left'}
+
+renderPlot({
+  
+  req(input$site_id, input$tree_id)
+  
+cores1 %>%
+  filter(Site_ID == input$site_id) %>%
+  mutate(mean_mm = mean(mm)) %>%
+  mutate(Tree_ID = as.factor(Tree_ID)) %>%
+   ggplot() +
+  geom_point(aes(x = Year, y = mm, group = Tree_ID, col = Tree_ID)) +
+  geom_line(aes(x = Year, y = mm, group = Tree_ID, col = Tree_ID)) +
+  geom_hline(aes(yintercept = mean_mm, group = Tree_ID, col = Tree_ID), linetype = 2) +
+  facet_wrap(~Species,  ncol = 3) +
+    force_panelsizes(
+    cols = unit(6.5, "cm"), 
+    rows = unit(5, "cm")
+  ) +
+    scale_x_continuous(labels = function(x) as.integer(x)) +
+  theme_bw(15)
+  
+})
+```
+
+
+<br> <br>
+
+::: {.tocify-extend-page data-unique="tocify-extend-page" style="height: 0;"}
+:::
